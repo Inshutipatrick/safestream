@@ -1,0 +1,20 @@
+# Phase 2 overlay. Does not change your locally corrected Phase 1 compose.yaml.
+services:
+  processor:
+    build: .
+    restart: unless-stopped
+    command: ["python", "-m", "safestream.processor"]
+    environment:
+      MQTT_HOST: mosquitto
+      MQTT_PORT: "1883"
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_STREAM: safestream:telemetry
+      ALERTS_STREAM: safestream:alerts
+      REDIS_GROUP: safestream-safety-v1
+      PROCESSED_SET: safestream:processed-event-ids
+      DEAD_LETTER_STREAM: safestream:dead-letter
+      MIN_IDLE_MS: "5000"
+    depends_on:
+      redis:
+        condition: service_healthy
