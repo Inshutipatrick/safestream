@@ -1,0 +1,56 @@
+name: safestream
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2
+    restart: unless-stopped
+
+    volumes:
+      - ./mosquitto/config/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - mqtt-data:/mosquitto/data
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
+
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  ingestion:
+    build: .
+    restart: unless-stopped
+    command: ["python", "-m", "safestream.ingestion"]
+    environment:
+      MQTT_HOST: mosquitto
+      MQTT_PORT: "1883"
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_STREAM: safestream:telemetry
+      MQTT_INGEST_CLIENT_ID: safestream-ingestion-v1
+    depends_on:
+      mosquitto:
+        condition: service_started
+      redis:
+        condition: service_healthy
+
+  simulator:
+    build: .
+    restart: unless-stopped
+    command: ["python", "-m", "safestream.simulator", "--interval", "1"]
+    environment:
+      MQTT_HOST: mosquitto
+      MQTT_PORT: "1883"
+    depends_on:
+      mosquitto:
+        condition: service_started
+      ingestion:
+        condition: service_started
+
+volumes:
+  mqtt-data:
+  redis-data:
