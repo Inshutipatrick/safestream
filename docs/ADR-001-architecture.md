@@ -11,7 +11,7 @@
 - MQTT session is persistent on broker, but the Python Paho client has limits around client-side session state across process restarts. We do not claim mathematically lossless delivery.
 - Redis AOF with `appendfsync everysec` can lose the most recent data after power loss; this is a learning environment, not a safety-certified system.
 - Simulator generates synthetic proximity *measurements*. It does not simulate true sensor physics, coordinate uncertainty, or real worker safety.
-- `allow_anonymous true` and no TLS are **development-only**. Container services share a private Docker network and host-published ports bind to 127.0.0.1.
+- `allow_anonymous true` and no TLS are **development-only**. Container services share a private Docker network. In the verified Windows configuration, host port mappings for MQTT and Redis were removed to avoid collisions and reduce exposure.
 - Redis Stream entries are append-only without retention or deduplication in Phase 1. The simulator's default 1 event/second is deliberately modest.
 
 **Explicitly out of scope in Phase 1:** risk thresholds, alert state machines, Redis consumer groups, TimescaleDB, Grafana, Kafka, live safety deployment.

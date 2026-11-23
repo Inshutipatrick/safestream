@@ -1,7 +1,34 @@
+# Python and local tooling
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
 .venv/
-.env
+venv/
 *.egg-info/
+build/
+dist/
+
+# Credentials / developer-specific environment
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Runtime state and logs
+*.log
+logs/
+results/
+*.rdb
+appendonlydir/
+
+# OS and editors
 .DS_Store
+Thumbs.db
+.vscode/
+.idea/

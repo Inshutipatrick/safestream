@@ -1,6 +1,6 @@
 # ADR-003 — Deterministic consumer-failure experiment (Phase 2.2)
 
-**Status:** Proposed for local validation
+**Status:** Accepted as a local controlled experiment (2026-11-23).
 
 ## Context
 
@@ -41,3 +41,7 @@ engineering parameters.
 If this test passes, subsequent work can test abrupt termination of the
 normal processor under concurrency, Redis availability disruptions, and
 bounded deduplication storage as separate experiments.
+
+## Recorded verification (2026-11-23)
+
+The developer reported `38 passed` from pytest and a live probe result of `PASS Phase 2.2: abandoned pending event recovered + replay deduplicated`, with `matching_alerts=1` and `pending=0`. The normal processor and simulator were restarted. This evidence applies to the one-off fault-injector experiment described above; it does not imply that Redis outages or concurrent processor failures were tested.

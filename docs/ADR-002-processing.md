@@ -1,6 +1,6 @@
 # ADR-002 — Event processing, deduplication, and recovery
 
-**Status:** Proposed for local acceptance (Phase 2 initial implementation).
+**Status:** Accepted for local prototype after Phase 2.1 integration verification (2026-11-23).
 
 ## Decision
 
@@ -30,4 +30,4 @@
 2. New boundary/processor unit tests pass.
 3. A new 1.2 m MQTT event yields a `CRITICAL` alert in Redis.
 4. Replaying the same event ID does not add a second logical alert.
-5. A worker restart after a pending message can reclaim it (to be verified in an explicit failure-injection gate).
+5. An abandoned pending entry was reclaimed and acknowledged by the normal processor in the Phase 2.2 controlled probe (2026-11-23). This is not a test of abrupt termination of the actual processor mid-callback.
