@@ -1,86 +1,116 @@
-# SafeStream — Phase 1: Telemetry and MQTT
+# SafeStream
 
-A minimal, reproducible event-driven safety telemetry pipeline for learning distributed systems.
+**Event-driven safety alerts — a distributed-systems learning prototype**
 
-```text
-simulator (Python) --MQTT QoS 1--> Mosquitto
-                                      |
-                                      v
-                             ingestion (Python)
-                              validate schema
-                                      |
-                                Redis XADD
-                                      v
-                            safestream:telemetry
-```
+SafeStream ingests simulated worker–equipment proximity measurements over MQTT, persists them in Redis Streams, processes events with a Redis consumer group, and emits WARNING or CRITICAL alerts. It is designed to demonstrate asynchronous delivery, event validation, idempotent processing, and recovery of pending messages.
 
-## Requirements
+> **Research/development prototype only.** Synthetic measurements and thresholds are not validated for construction-site operations. Do not use this software as a personnel-protection or life-safety system.
 
-- Docker Desktop with Linux containers and Docker Compose v2 (Windows 10/11), or Docker Engine + Compose on Linux.
-- An available local port **1883** (MQTT) and **6379** (Redis).
-- No host Python installation is needed for the four-service demo.
+## Current status
 
-## Start (Windows PowerShell)
+| Milestone | What was verified | Status |
+| --- | --- | --- |
+| Phase 1 — telemetry and MQTT | MQTT → ingestion → Redis smoke test; 13 unit tests | Passed locally |
+| Phase 2.1 — alert processing | CRITICAL event and duplicate replay; 29 unit tests | Passed locally |
+| Phase 2.2 — recovery experiment | Pending message reclaimed and acknowledged; exactly one alert after replay; 38 unit tests | Passed locally |
+| Further reliability work | Real processor termination, Redis outage, load/latency, retention limits | Not yet verified |
+| Phase 3+ | TimescaleDB, FastAPI, Grafana, production-style observability | Not implemented |
 
-Open PowerShell in this folder. Ensure Docker Desktop is running.
+The results above are from the project developer's Windows/Docker environment on **2026-11-23**; they are not claims of formal certification or an independent production audit.
 
-```powershell
-docker compose version
-docker compose config
-docker compose up --build -d
-docker compose ps
-docker compose logs -f --tail=30 ingestion simulator
-```
-
-`Ctrl+C` stops watching logs; it does **not** stop the Compose services.
-
-## Phase 1 acceptance test
-
-Run in another PowerShell terminal in the same folder:
-
-```powershell
-docker compose exec ingestion python -m safestream.smoke --timeout 30
-```
-
-Expected output (event ID and Redis ID will differ):
+## Architecture
 
 ```text
-PASS MQTT -> ingestion -> Redis Streams
-event_id=<generated-uuid> redis_id=<generated-id>
+simulator (Python)
+    │ proximity events, MQTT QoS 1
+    ▼
+Mosquitto MQTT broker
+    │ topic: safestream/v1/sites/+/proximity
+    ▼
+ingestion (Python) ─── validates payload, XADD before MQTT ACK
+    │
+    ▼
+Redis Stream: safestream:telemetry
+    │ consumer group: safestream-safety-v1
+    ▼
+processor (Python) ─── rules: SAFE / WARNING / CRITICAL
+    ├──► Redis Stream: safestream:alerts (WARNING, CRITICAL)
+    ├──► Redis Stream: safestream:dead-letter (invalid records)
+    └──► Redis Set: safestream:processed-event-ids (deduplication)
+         (Lua outcome + dedup record + XACK on one Redis instance)
 ```
 
-The smoke test publishes a **new unique MQTT event** and verifies the matching event ID appears in the Redis Stream; it does not fake a Redis insertion. The already-running `ingestion` service must process it.
+The stack has **five services**: `mosquitto`, `redis`, `ingestion`, `simulator`, and `processor`. `compose.phase2.yaml` adds the fifth service to the existing Phase 1 Compose file. Keep both files in Compose commands until a separately tested consolidation is approved.
 
-View stream length and recent entries:
+## Prerequisites
+
+- Docker Desktop with Linux containers and Docker Compose on Windows, or Docker Engine plus Compose on Linux.
+- Python 3.12 for local tests. Containerized operation does not require a host Python installation.
+- **No Windows host-port bindings are needed.** Docker services communicate internally as `mosquitto:1883` and `redis:6379`. The locally corrected `compose.yaml` has had both `ports:` sections removed to avoid conflicts with other projects. Check your own `compose.yaml` before starting; do not reintroduce these bindings.
+
+## Quick start — Windows PowerShell
+
+From the repository root:
 
 ```powershell
-docker compose exec redis redis-cli XLEN safestream:telemetry
-docker compose exec redis redis-cli XREVRANGE safestream:telemetry + - COUNT 2
+cd D:\Dev\safestream
+docker compose -f compose.yaml -f compose.phase2.yaml config --quiet
+docker compose -f compose.yaml -f compose.phase2.yaml up --build -d
+docker compose -f compose.yaml -f compose.phase2.yaml ps
 ```
 
-Observe ingress logs only:
+Inspect logs:
 
 ```powershell
-docker compose logs --tail=20 ingestion
+docker compose -f compose.yaml -f compose.phase2.yaml logs --tail=40 ingestion simulator processor
 ```
 
-Stop services (keeps named volumes):
+Do not expose the unauthenticated MQTT broker or Redis to public networks.
+
+## Required verification
+
+### Unit tests
+
+Create the local environment only if `.venv` does not already exist:
 
 ```powershell
-docker compose down
+py -3.12 -m venv .venv
 ```
 
-**Warning:** `docker compose down -v` deletes recorded MQTT and Redis data.
+**PowerShell activation is not required** (useful when execution policy blocks `.ps1` scripts):
 
-## Event contract
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+.\.venv\Scripts\python.exe -m pytest -q
+```
 
-- MQTT topic: `safestream/v1/sites/site-01/proximity` (ingestion subscribes to `safestream/v1/sites/+/proximity`).
-- QoS: 1, retain: false.
-- Version: `schema_version=1.0`.
-- Fields: `event_id` (UUID), `site_id`, `worker_id`, `equipment_id`, `distance_m` (nonnegative finite float), `observed_at` (timezone-aware UTC), `sequence` (nonnegative integer), `source=simulator`.
-- Stream: `safestream:telemetry`; stored fields are `event_id`, `site_id`, `topic`, `payload`, and `received_at`.
+At the Phase 2.2 checkpoint, the expected unit-test baseline is **38 passed**. The GitHub Actions workflow runs these tests on pushes and pull requests; it does not execute Docker integration tests.
 
-Sample message:
+### Phase 1 smoke test
+
+```powershell
+docker compose -f compose.yaml -f compose.phase2.yaml exec ingestion python -m safestream.smoke --timeout 30
+```
+
+Expected: `PASS MQTT -> ingestion -> Redis Streams`.
+
+### Phase 2.1 smoke test
+
+```powershell
+docker compose -f compose.yaml -f compose.phase2.yaml exec processor python -m safestream.phase2_smoke --timeout 45
+```
+
+Expected: `PASS Phase 2: MQTT -> Redis consumer -> CRITICAL alert + deduplication`.
+
+### Phase 2.2 controlled recovery test
+
+**Do not run this blindly on a live/shared environment.** It intentionally stops the simulator and processor and injects an abandoned pending message. Follow the preflight, injection, verification, and cleanup sequence in [PHASE2-2.md](PHASE2-2.md).
+
+Expected: `PASS Phase 2.2: abandoned pending event recovered + replay deduplicated`.
+
+## Example event
+
+MQTT topic: `safestream/v1/sites/site-01/proximity`
 
 ```json
 {
@@ -96,37 +126,50 @@ Sample message:
 }
 ```
 
-The simulator repeats this distance sequence in meters: `8.0, 6.0, 4.0, 2.4, 1.2, 2.8, 5.5, 8.0` (approach / retreat), one unique event ID each time.
+Classification (simulation only): **SAFE** when distance > 3.0 m, **WARNING** when 1.5 m < distance <= 3.0 m, and **CRITICAL** when distance <= 1.5 m. The processor emits a new alert for *each distinct hazardous event ID*; it does not yet aggregate consecutive readings into incidents.
 
-## Run tests (optional)
+## Data and operations
+
+- Telemetry: `safestream:telemetry`
+- Alerts: `safestream:alerts`
+- Malformed events: `safestream:dead-letter`
+- Processed IDs: `safestream:processed-event-ids`
+- Consumer group: `safestream-safety-v1`
+
+Inspect stream length and group status:
 
 ```powershell
-py -3.12 -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install -r requirements-dev.txt
-python -m pytest -q
+docker compose -f compose.yaml -f compose.phase2.yaml exec redis redis-cli XLEN safestream:telemetry
+docker compose -f compose.yaml -f compose.phase2.yaml exec redis redis-cli XINFO GROUPS safestream:telemetry
 ```
 
-You can alternatively run tests in the image by adding pytest to a development Docker image; the production image intentionally installs only `requirements.txt`.
+Stop the stack **without deleting volumes**:
 
-## Troubleshooting
+```powershell
+docker compose -f compose.yaml -f compose.phase2.yaml down
+```
 
-- **`docker` not recognized:** install and start Docker Desktop. Docker Compose requires a running Docker engine; Python alone is not sufficient.
-- **`docker compose ps` shows exited services:** inspect `docker compose logs --tail=100 ingestion mosquitto redis simulator`.
-- **Port already in use:** find the other MQTT/Redis process, or change only the host-side port (`127.0.0.1:1883:1883`). Container-to-container ports remain 1883/6379.
-- **Smoke times out:** check ingestion logs for `SUBSCRIBED` and `INGESTED`; check Redis `XLEN` and restart with `docker compose restart ingestion` if necessary.
-- **PowerShell blocks script activation:** use `.venv\Scripts\python.exe -m pytest -q` without activation.
+**Do not run `down -v` unless you intentionally want to destroy stored telemetry, alerts, and deduplication state.**
 
-## Scope and engineering notes
+## Project map
 
-This is **Phase 1 only**: telemetry -> MQTT -> verified ingestion -> Redis Stream. It intentionally has **no alert rule engine** yet. Redis Streams is provisioned now to build a complete transport vertical slice, not to add Phase 2 consumer groups prematurely.
+```text
+compose.yaml                 Four core services (keep your local no-host-port fix)
+compose.phase2.yaml          Adds the processor service
+src/safestream/              Runtime services, event models, rules, and diagnostic probes
+tests/                       Unit tests (38 at Phase 2.2)
+mosquitto/config/            Development broker configuration
+PHASE2.md                   Historical Phase 2.1 execution guide
+PHASE2-2.md                 Controlled recovery experiment guide
+docs/ADR-*.md                Architectural decisions and limitations
+docs/KNOWN_LIMITATIONS.md    Prioritized technical debt
+.github/workflows/tests.yml  Unit-test CI (no Docker)
+```
 
-Ingestion uses manual MQTT acknowledgments *after* the Redis write. Messages can still be duplicated if ingestion crashes between Redis XADD and the MQTT ACK; Phase 2 adds a deduplication policy and idempotent processing.
+The two Phase 2 guides are **milestone runbooks**, not duplicate service implementations. Keep them for reproducibility, but treat this README as the up-to-date onboarding document.
 
-The broker uses anonymous access and no TLS; host ports bind to loopback. Do **not** expose it to a real network or treat the demo as an operational life-safety service.
+## Engineering limitations and security
 
-See `docs/ADR-001-architecture.md` for decisions and limits.
+This project currently uses an anonymous, unencrypted development MQTT listener; Redis has no application-level authentication; default Redis AOF persistence can lose recently acknowledged writes after a power loss; and deduplication state grows unbounded. No hard real-time guarantees, field-sensor calibration, access controls, or incident-level alert suppression are implemented. See [Known limitations](docs/KNOWN_LIMITATIONS.md) and [architecture decision records](docs/ADR-001-architecture.md).
 
-## Next acceptance gate (Phase 2)
-
-Consume `safestream:telemetry` with a Redis consumer group; evaluate proximity rules; create stable alert IDs; acknowledge only after a durable processing result; demonstrate idempotency and restart recovery.
+**Never commit `.env`, `.venv`, credentials, broker/Redis data volumes, or generated test outputs.** The system must remain isolated to a local development environment.
